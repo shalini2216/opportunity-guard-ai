@@ -98,6 +98,53 @@ def connect_gmail_imap():
     log_audit(request.user_id, "GMAIL_IMAP_CONNECTED", {"email": email_address})
     return jsonify(result)
 
+@email_bp.route("/import-text", methods=["POST"])
+@token_required
+def import_email_text():
+    """
+    Directly import any email text/content pasted by user.
+    Runs through AI extraction, creates Opportunity and persistent reminders.
+    """
+    data = request.get_json() or {}
+    subject = data.get("subject", "").strip() or "Imported Email Opportunity"
+    sender = data.get("sender", "").strip() or "user-import@gmail.com"
+    body = data.get("body", "").strip()
+    is_unopened = bool(data.get("is_unopened", True))
+
+    if not body and not subject:
+        return jsonify({"error": "Email subject or message body is required", "success": False}), 400
+
+    from services.opportunity_detector import process_email_and_detect_opportunity
+    db = get_db()
+    user_id = request.user_id
+    now = datetime.now(timezone.utc)
+
+    email_doc = {
+        "user_id": user_id,
+        "provider_id": f"manual_import_{int(now.timestamp())}",
+        "sender": sender,
+        "subject": subject,
+        "snippet": body[:180].replace("\n", " ").strip() or subject,
+        "body_text": body or subject,
+        "received_at": now.isoformat(),
+        "read_state": "UNOPENED" if is_unopened else "OPENED",
+        "source": "manual_import"
+    }
+
+    res = db.emails.insert_one(email_doc)
+    email_doc["_id"] = res.inserted_id
+
+    detection = process_email_and_detect_opportunity(user_id, email_doc, reference_now=now)
+    log_audit(user_id, "EMAIL_TEXT_IMPORTED", {"subject": subject})
+
+    return jsonify({
+        "success": True,
+        "message": "Email imported and analyzed successfully by OpportunityGuard AI!",
+        "email_id": str(email_doc["_id"]),
+        "opportunity_id": detection.get("opportunity_id"),
+        "analysis": detection.get("analysis")
+    })
+
 @email_bp.route("/connect", methods=["POST"])
 @token_required
 def connect_email():

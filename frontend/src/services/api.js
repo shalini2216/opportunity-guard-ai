@@ -39,6 +39,10 @@ export const api = {
     method: 'POST',
     body: JSON.stringify({ email_address, app_password }),
   }),
+  importEmailText: (data) => request('/email/import-text', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
   getEmails: (params = {}) => {
     const q = new URLSearchParams(params).toString();
     return request(`/email${q ? `?${q}` : ''}`);

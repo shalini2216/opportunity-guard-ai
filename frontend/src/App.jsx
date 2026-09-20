@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom
 import Navbar from './components/Navbar';
 import Sidebar from './components/Sidebar';
 import EscalationSimulator from './components/EscalationSimulator';
+import PersistentAlertManager from './components/PersistentAlertManager';
 
 import Landing from './pages/Landing';
 import Login from './pages/Login';
@@ -49,6 +50,9 @@ function ProtectedLayout() {
           <Outlet />
         </main>
       </div>
+
+      {/* Global Persistent Alert Manager: Continuous popups until opened */}
+      <PersistentAlertManager />
     </div>
   );
 }

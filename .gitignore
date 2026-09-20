@@ -1,0 +1,37 @@
+# Environment & Credentials (NEVER COMMIT)
+.env
+.env.local
+*.pem
+*.key
+credentials.json
+client_secrets.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+venv/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Node / Frontend
+node_modules/
+dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Database & Local Run
+*.sqlite3
+*.log
+scratch/
+.system_generated/
+
+# OS Specific
+.DS_Store
+Thumbs.db

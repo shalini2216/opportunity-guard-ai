@@ -6,6 +6,7 @@ import {
 import { Link } from 'react-router-dom';
 import OpportunityCard from '../components/OpportunityCard';
 import EscalationSimulator from '../components/EscalationSimulator';
+import ConnectGmailModal from '../components/ConnectGmailModal';
 import { api } from '../services/api';
 
 export default function Dashboard() {
@@ -13,6 +14,7 @@ export default function Dashboard() {
   const [radarItems, setRadarItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filterCategory, setFilterCategory] = useState('ALL');
+  const [showConnectModal, setShowConnectModal] = useState(false);
 
   const fetchData = async () => {
     setLoading(true);
@@ -204,9 +206,40 @@ export default function Dashboard() {
             <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-indigo-500" />
             Evaluating opportunity pipeline...
           </div>
+        ) : opportunities.length === 0 ? (
+          <div className="p-8 sm:p-12 rounded-3xl bg-gradient-to-br from-indigo-950/40 via-slate-900 to-purple-950/40 border border-indigo-500/30 text-center space-y-4 shadow-2xl">
+            <div className="w-14 h-14 rounded-2xl bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 flex items-center justify-center mx-auto">
+              <Sparkles className="w-7 h-7 animate-pulse" />
+            </div>
+            <div className="max-w-lg mx-auto">
+              <h3 className="text-xl font-bold text-slate-100">Welcome to OpportunityGuard AI</h3>
+              <p className="text-xs sm:text-sm text-slate-400 mt-2 leading-relaxed">
+                Connect your real Gmail inbox to import your actual previous emails and detect opportunities, or load the realistic demo dataset to evaluate the platform.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+              <button
+                onClick={() => setShowConnectModal(true)}
+                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/30 transition-all hover:scale-105"
+              >
+                <span>Connect Your Gmail Inbox</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+              <button
+                onClick={async () => {
+                  await api.seedDemo();
+                  fetchData();
+                }}
+                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                <span>Load Sample Demo Emails</span>
+              </button>
+            </div>
+          </div>
         ) : filteredOpps.length === 0 ? (
           <div className="p-12 rounded-2xl bg-slate-900/40 border border-slate-800 text-center text-slate-400 text-sm">
-            No opportunities found matching filter.
+            No opportunities found matching category filter.
           </div>
         ) : (
           <div className="space-y-4">
@@ -220,6 +253,13 @@ export default function Dashboard() {
           </div>
         )}
       </section>
+
+      {showConnectModal && (
+        <ConnectGmailModal
+          onClose={() => setShowConnectModal(false)}
+          onConnected={fetchData}
+        />
+      )}
     </div>
   );
 }

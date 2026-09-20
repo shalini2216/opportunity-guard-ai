@@ -34,6 +34,11 @@ export const api = {
   getMe: () => request('/auth/me'),
 
   // Email
+  getEmailAccount: () => request('/email/account'),
+  connectGmailImap: (email_address, app_password) => request('/email/connect-imap', {
+    method: 'POST',
+    body: JSON.stringify({ email_address, app_password }),
+  }),
   getEmails: (params = {}) => {
     const q = new URLSearchParams(params).toString();
     return request(`/email${q ? `?${q}` : ''}`);

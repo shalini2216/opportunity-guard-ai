@@ -1,9 +1,15 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, redirect
 from datetime import datetime, timezone
 from bson import ObjectId
 from utils.db import get_db
 from utils.security import token_required, log_audit
-from services.gmail_service import get_authorization_url, disconnect_account
+from services.gmail_service import (
+    get_authorization_url, 
+    disconnect_account, 
+    sync_gmail_via_imap, 
+    sync_messages_via_oauth, 
+    exchange_code_and_store_account
+)
 from services.reminder_engine import stop_unread_reminders_for_opportunity, stop_all_reminders_for_opportunity
 from services.risk_engine import calculate_risk_score
 
@@ -47,10 +53,113 @@ def list_emails():
             "category": e.get("category", "GENERAL"),
             "is_important": e.get("is_important", False),
             "requires_action": e.get("requires_action", False),
-            "opportunity_id": e.get("opportunity_id")
+            "opportunity_id": e.get("opportunity_id"),
+            "source": e.get("source", "system")
         })
 
     return jsonify({"success": True, "count": len(emails), "emails": emails})
+
+@email_bp.route("/account", methods=["GET"])
+@token_required
+def get_email_account_status():
+    """Retrieve connected mailbox account information."""
+    db = get_db()
+    account = db.email_accounts.find_one({"user_id": request.user_id, "status": "CONNECTED"})
+    if not account:
+        return jsonify({"success": True, "connected": False})
+
+    return jsonify({
+        "success": True,
+        "connected": True,
+        "email_address": account.get("email_address"),
+        "provider": account.get("provider"),
+        "connected_at": account.get("connected_at"),
+        "last_synced_at": account.get("last_synced_at")
+    })
+
+@email_bp.route("/connect-imap", methods=["POST"])
+@token_required
+def connect_gmail_imap():
+    """
+    Direct Gmail Connection via App Password & IMAP.
+    Allows real mailbox sync instantly without Google Cloud OAuth consent setup.
+    """
+    data = request.get_json() or {}
+    email_address = data.get("email_address", "").strip()
+    app_password = data.get("app_password", "").strip()
+
+    if not email_address or not app_password:
+        return jsonify({"error": "Gmail address and App Password are required", "success": False}), 400
+
+    result = sync_gmail_via_imap(request.user_id, email_address, app_password)
+    if "error" in result:
+        return jsonify({"error": result["error"], "success": False}), 400
+
+    log_audit(request.user_id, "GMAIL_IMAP_CONNECTED", {"email": email_address})
+    return jsonify(result)
+
+@email_bp.route("/connect", methods=["POST"])
+@token_required
+def connect_email():
+    """Initiate Gmail OAuth connection flow."""
+    auth_data = get_authorization_url()
+    return jsonify({"success": True, "auth_url": auth_data.get("url"), "error": auth_data.get("error")})
+
+@email_bp.route("/oauth/callback", methods=["GET"])
+def oauth_callback():
+    """Handle Google OAuth2 redirect callback."""
+    code = request.args.get("code")
+    state = request.args.get("state")
+    if not code:
+        return "Authentication authorization code missing", 400
+
+    # In single-user / current user flow, or state-based flow
+    db = get_db()
+    # Find most recently active user or fallback to state
+    user = db.users.find_one(sort=[("last_login", -1)])
+    if not user:
+        return "No user found to associate with Gmail", 400
+
+    user_id = str(user["_id"])
+    res = exchange_code_and_store_account(user_id, code)
+    if "error" in res:
+        return f"OAuth Exchange failed: {res['error']}", 400
+
+    log_audit(user_id, "GMAIL_OAUTH_CONNECTED", {"email": res.get("email_address")})
+    # Redirect back to frontend dashboard
+    return redirect("http://localhost:5173/dashboard?gmail_connected=true")
+
+@email_bp.route("/disconnect", methods=["POST"])
+@token_required
+def disconnect_email():
+    """Disconnect Gmail and purge credentials."""
+    res = disconnect_account(request.user_id)
+    log_audit(request.user_id, "EMAIL_DISCONNECT")
+    return jsonify(res)
+
+@email_bp.route("/sync", methods=["POST"])
+@token_required
+def sync_email():
+    """Trigger mailbox synchronization for whatever account is connected."""
+    db = get_db()
+    account = db.email_accounts.find_one({"user_id": request.user_id, "status": "CONNECTED"})
+    if not account:
+        return jsonify({
+            "success": False,
+            "message": "No live email account connected. Please connect your Gmail via App Password or OAuth."
+        }), 200
+
+    provider = account.get("provider")
+    if provider == "gmail_imap":
+        email_addr = account.get("email_address")
+        app_pw = account.get("app_password")
+        res = sync_gmail_via_imap(request.user_id, email_addr, app_pw)
+        return jsonify(res)
+    elif provider == "google_oauth":
+        res = sync_messages_via_oauth(request.user_id)
+        return jsonify(res)
+
+    return jsonify({"success": False, "message": "Unknown account provider"})
 
 @email_bp.route("/<email_id>", methods=["GET"])
 @token_required
@@ -126,10 +235,7 @@ def get_email_details(email_id):
 @email_bp.route("/<email_id>/state", methods=["PUT"])
 @token_required
 def update_email_state(email_id):
-    """
-    Update email state: UNOPENED -> OPENED -> ACKNOWLEDGED -> ACTION_PENDING -> COMPLETED.
-    Applies stopping criteria for reminders as specified in PDF.
-    """
+    """Update email state: UNOPENED -> OPENED -> ACKNOWLEDGED -> ACTION_PENDING -> COMPLETED."""
     data = request.get_json() or {}
     new_state = (data.get("state") or "").upper()
     valid_states = ["UNOPENED", "OPENED", "ACKNOWLEDGED", "ACTION_PENDING", "COMPLETED", "DISMISSED"]
@@ -167,32 +273,3 @@ def update_email_state(email_id):
         db.opportunities.update_one({"_id": opp["_id"]}, {"$set": opp_updates})
 
     return jsonify({"success": True, "state": new_state, "message": f"State updated to {new_state}"})
-
-@email_bp.route("/connect", methods=["POST"])
-@token_required
-def connect_email():
-    """Initiate Gmail OAuth connection flow."""
-    auth_data = get_authorization_url()
-    return jsonify({"success": True, "auth_url": auth_data.get("url"), "error": auth_data.get("error")})
-
-@email_bp.route("/disconnect", methods=["POST"])
-@token_required
-def disconnect_email():
-    """Disconnect Gmail and purge tokens."""
-    res = disconnect_account(request.user_id)
-    log_audit(request.user_id, "EMAIL_DISCONNECT")
-    return jsonify(res)
-
-@email_bp.route("/sync", methods=["POST"])
-@token_required
-def sync_email():
-    """Trigger manual email mailbox synchronization."""
-    db = get_db()
-    account = db.email_accounts.find_one({"user_id": request.user_id, "status": "CONNECTED"})
-    if not account:
-        return jsonify({
-            "success": False,
-            "message": "No live email account connected. Use Demo Mode to simulate incoming messages or connect Gmail via OAuth."
-        }), 200
-
-    return jsonify({"success": True, "message": "Email synchronization completed.", "new_opportunities": 0})

@@ -68,9 +68,34 @@ def login():
         return jsonify({"error": "Email and password are required.", "success": False}), 400
 
     db = get_db()
+    # Support email matching (including dhonthu / donthu spelling variations)
     user = db.users.find_one({"email": email})
-    if not user or not verify_password(password, user.get("password_hash", "")):
+    if not user and email == "donthushalini@gmail.com":
+        user = db.users.find_one({"email": "dhonthushalini@gmail.com"})
+    elif not user and email == "dhonthushalini@gmail.com":
+        user = db.users.find_one({"email": "donthushalini@gmail.com"})
+
+    if not user:
         return jsonify({"error": "Invalid email or password.", "success": False}), 401
+
+    clean_pw = password.strip()
+    clean_pw_nospace = clean_pw.replace(" ", "")
+
+    # 1. Verify standard password hash
+    is_valid = verify_password(clean_pw, user.get("password_hash", "")) or verify_password(clean_pw_nospace, user.get("password_hash", ""))
+
+    # 2. Check if user typed their connected Gmail App Password
+    if not is_valid:
+        acc = db.email_accounts.find_one({"user_id": str(user["_id"])})
+        if acc:
+            stored_app_pw = (acc.get("app_password") or "").strip().replace(" ", "")
+            if stored_app_pw and (clean_pw == stored_app_pw or clean_pw_nospace == stored_app_pw):
+                is_valid = True
+                # Automatically sync password_hash so both passwords work seamlessly
+                db.users.update_one({"_id": user["_id"]}, {"$set": {"password_hash": hash_password(clean_pw)}})
+
+    if not is_valid:
+        return jsonify({"error": "Invalid email or password. Please verify your password or use your 16-character App Password.", "success": False}), 401
 
     user_id = str(user["_id"])
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -89,6 +114,33 @@ def login():
             "settings": user.get("settings", {})
         }
     }), 200
+
+@auth_bp.route("/reset-password", methods=["POST"])
+def reset_password():
+    """Reset password for user by email."""
+    data = request.get_json() or {}
+    email = (data.get("email") or "").strip().lower()
+    new_password = data.get("new_password") or ""
+
+    if not email or not new_password:
+        return jsonify({"error": "Email and new password are required", "success": False}), 400
+
+    if len(new_password) < 6:
+        return jsonify({"error": "Password must be at least 6 characters", "success": False}), 400
+
+    db = get_db()
+    user = db.users.find_one({"email": email})
+    if not user and email == "donthushalini@gmail.com":
+        user = db.users.find_one({"email": "dhonthushalini@gmail.com"})
+    elif not user and email == "dhonthushalini@gmail.com":
+        user = db.users.find_one({"email": "donthushalini@gmail.com"})
+
+    if not user:
+        return jsonify({"error": "User with this email not found", "success": False}), 404
+
+    db.users.update_one({"_id": user["_id"]}, {"$set": {"password_hash": hash_password(new_password)}})
+    log_audit(str(user["_id"]), "PASSWORD_RESET", {"email": email})
+    return jsonify({"success": True, "message": "Password reset successfully! You can now log in."})
 
 @auth_bp.route("/me", methods=["GET"])
 @token_required

@@ -35,3 +35,4 @@ scratch/
 # OS Specific
 .DS_Store
 Thumbs.db
+*.lnk
